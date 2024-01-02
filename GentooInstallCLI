@@ -1,3 +1,13 @@
+#WORK IN PROGRESS THIS IS A SIDE PROJECT
+
+##########################
+#CHANGE THESE SETTINGS
+ADMIN_USER="someUser"
+ADMIN_PASS="somePass"
+ROOT_PASS="rootPass"
+##########################
+
+
 # CREATE PARTITIONS
 sudo parted -s -a optimal /dev/xvda mklabel gpt
 sudo parted -s -a optimal /dev/xvda mkpart ESP fat32 2048s 500MB
@@ -114,9 +124,9 @@ genfstab -U /mnt/gentoo > /mnt/gentoo/etc/fstab
 sed -ie '/\/sys\/kernel\/tracing/d;/tracefs/d' /mnt/gentoo/etc/fstab
 
 #SETUP PASSWORDS USER AND LOCALTIME AND MACHINE ID
-passwd
-useradd -m -G wheel -s /bin/bash doc
-passwd doc
+echo "$ROOT_PASS" | passwd root
+useradd -m -G wheel -s /bin/bash $ADMIN_USER
+echo "$ADMIN_PASS" | passwd $ADMIN_USER
 ln -sf /usr/share/zoominfo/US/Eastern /etc/localtime
 timedatectl set-timezone US/Eastern
 systemd-machine-id-setup
