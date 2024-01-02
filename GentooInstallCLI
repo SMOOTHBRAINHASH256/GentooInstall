@@ -1,0 +1,143 @@
+# CREATE PARTITIONS
+sudo parted -s -a optimal /dev/xvda mklabel gpt
+sudo parted -s -a optimal /dev/xvda mkpart ESP fat32 2048s 500MB
+sudo parted -s -a optimal /dev/xvda mkpart primary linux-swap 500MB 16G
+sudo parted -s -a optimal /dev/xvda mkpart primary ext4 16G 100%
+
+# CREATE FILESYSTEMS & MOUNTS
+sudo parted -s /dev/xvda set 1 esp on
+sudo mkfs.vfat -F 32 /dev/xvda1
+sudo mkswap /dev/xvda2
+sudo mkfs.ext4 /dev/xvda3
+sudo mkdir --parents /mnt/gentoo/boot/efi
+sudo mount /dev/xvda1 /mnt/gentoo/boot/efi
+sudo swapon /dev/xvda2
+sudo mkdir --parents /mnt/gentoo
+sudo mount /dev/xvda3 /mnt/gentoo
+
+#DEV SHIM
+sudo test -L /dev/shm && rm /dev/shm && mkdir /dev/shm
+sudo mount --types tmpfs --options nosuid,nodev,noexec shm /dev/shm
+sudo apt-get install arch-install-scripts
+sudo chmod 1777 /dev/shm /run/shm
+
+#GET THE TARBALL UNPACK AND 
+cd /mnt/gentoo
+sudo wget https://bouncer.gentoo.org/fetch/root/all/releases/amd64/autobuilds/20220308T160629Z/stage3-amd64-systemd-20220308T160629Z.tar.xz
+sudo tar xpvf stage3-*.tar.xz --xattrs-include='*.*' --numeric-owner
+
+#systemd-nspawn -bD /mnt
+ 
+#MOUNT PROCESSES ETC.
+sudo cp --dereference /etc/resolv.conf /mnt/gentoo/etc/
+sudo mount --types proc /proc /mnt/gentoo/proc
+sudo mount --rbind /sys /mnt/gentoo/sys
+sudo mount --make-rslave /mnt/gentoo/sys
+sudo mount --rbind /dev /mnt/gentoo/dev
+sudo mount --make-rslave /mnt/gentoo/dev
+sudo mount --bind /run /mnt/gentoo/run
+sudo mount --make-slave /mnt/gentoo/run
+sudo chroot /mnt/gentoo /bin/bash
+source /etc/profile
+export PS1="(chroot) ${PS1}"
+
+
+
+#CONFIGURE PACKAGE MANAGER AKA EMERGE
+emerge-webrsync
+ln -sf /proc/self/mounts /etc/mtab
+emerge --sync
+eselect profile set 17
+emerge --ask --verbose --update --deep --newuse @world
+
+#SET LOCALE AND KEYMAP
+rm /etc/locale.gen
+cat << EOF > /etc/locale.gen
+
+en_US.UTF-8 UTF-8
+C.UTF8 UTF-8
+
+EOF
+
+locale-gen
+eselect locale set 4
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "KEYMAP=us" > /etc/vconsole.conf
+env-update && source /etc/profile && export PS1="(chroot) ${PS1}"
+
+#CONFIGURE SYSTEM PROPERTIES
+echo "GENPROX" > /etc/hostname
+echo 'hostname="GENPROX"' > /etc/conf.d/hostname
+sed -i '/127.0.0.1./i 127.0.0.1       GENPROX' /etc/hosts
+cat << EOF > /etc/systemd/network/50-dhcp.network
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes
+
+EOF
+
+cat << EOF > /etc/portage/make.conf
+
+MAKEOPTS="-j8"
+
+USE="acl amd64 bzip2 cli crypt dri fortran gdbm gnuefi iconv ipv6 libglvnd libtirpc multilib ncurses nls nptl openmp pam pcre readline seccomp split-usr ssl systemd udev unicode xattr zlib"
+
+COMMON_FLAGS="-march=haswell -O2 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+FFLAGS="${COMMON_FLAGS}"
+FCFLAGS="${COMMON_FLAGS}"
+
+ACCEPT_LICENSE="*"
+
+PORTDIR="/var/db/repos/gentoo"
+DISTDIR="/var/cache/distfiles"
+PKGDIR="/var/cache/binpkgs"
+
+GENTOO_MIRRORS="http://gentoo.mirrors.tds.net/gentoo"
+GRUB_PLATFORMS="efi-64"
+
+EOF
+
+#EMERGE PACKAGES THEN CONFIGURE AND COMPILE KERNEL
+emerge --ask sys-kernel/gentoo-sources sys-apps/pciutils sys-apps/systemd sys-process/systemd-cron sys-boot/efibootmgr net-misc/dhcpcd
+eselect kernel set 1
+cd /usr/src/linux
+make menuconfig
+make && make modules_install && make install
+emerge -avDN @world
+
+#SETUP FILESYSTEM FILE
+genfstab -U /mnt/gentoo > /mnt/gentoo/etc/fstab
+sed -ie '/\/sys\/kernel\/tracing/d;/tracefs/d' /mnt/gentoo/etc/fstab
+
+#SETUP PASSWORDS USER AND LOCALTIME AND MACHINE ID
+passwd
+useradd -m -G wheel -s /bin/bash doc
+passwd doc
+ln -sf /usr/share/zoominfo/US/Eastern /etc/localtime
+timedatectl set-timezone US/Eastern
+systemd-machine-id-setup
+
+#CONFIGURE GRUB
+emerge grub
+mkdir /boot/efi
+mount /dev/xvda1 /boot/efi
+mount -o remount,rw /boot/efi
+grub-mkconfig -o /boot/efi/grub.cfg
+#echo 'GRUB_CMDLINE_LINUX="init=/usr/lib/systemd/systemd dolvm"' >> /etc/default/grub
+grub-install /dev/xvda
+
+
+
+#systemctl enable systemd-networkd.service
+#systemctl start systemd-networkd.service
+#ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+#systemctl enable systemd-resolved.service
+#systemctl start systemd-resolved.service
+systemctl enable cron.target
+systemctl start cron.target
+systemctl preset-all
+
